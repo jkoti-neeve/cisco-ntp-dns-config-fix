@@ -1,0 +1,24 @@
+# AI Dev Framework — infrastructure (pulled from framework repo, not committed)
+# Project knowledge files travel across devs (plans, handoffs, plan-impl reports,
+# context, config, lessons, roadmap). Per-dev / framework-shipped files don't.
+.ai/*
+!.ai/PROJECT_CONFIG.md
+!.ai/PROJECT_LESSONS.md
+!.ai/ROADMAP.md
+!.ai/context/
+!.ai/plans/
+!.ai/handoffs/
+!.ai/reports/
+.ai/reports/*/
+!.ai/reports/plan-implementation/
+.ai/plans/.*
+.ai/handoffs/.*
+.ai/reports/plan-implementation/.*
+.claude/
+.agent/
+CLAUDE.md
+AGENTS.md
+.cursorrules
+.windsurfrules
+.clinerules
+.github/copilot-instructions.md
