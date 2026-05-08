@@ -173,13 +173,50 @@ A small helper script (`scripts/render-config.sh`) reads `.env` and:
    - Tails DNS query log + NTP packet capture into `out/<run-id>/`
    - Reports pass/fail per the Verification checklist
 
-### Networking decision (committed): WSL2 + Docker Desktop
+### Networking decision (committed): Linux host (Hyper-V VM with cabled NIC bridged)
 
-- Containers run inside WSL2; Windows NIC is configured with the necessary IP aliases.
-- Open question for the spike: whether `docker compose` with a `macvlan` or
-  `host` network plugin can directly attach to the Windows-side NIC. Likely
-  approach: Windows NIC has the alias IPs; netsh/PowerShell port-forwards
-  UDP 53 and 123 from the alias IPs to the WSL2 container's listening port.
+> **Pivoted 2026-05-08 during the implementation-session spike.** The original
+> "WSL2 + Docker Desktop on Windows host" plan was infeasible on Windows 10
+> for two compounding reasons (see § "Spike findings"):
+>
+> 1. `SharedAccess` (ICS) holds a wildcard `0.0.0.0:53` UDP listener (it backs
+>    Hyper-V Default Switch's DNS proxy). A wildcard catches port 53 on every
+>    local IP — Docker Desktop can't publish a container's UDP/53 to any
+>    Windows IP, alias or otherwise, without first stopping ICS (which
+>    disrupts Hyper-V VMs and shared-network features).
+> 2. `W32Time` holds `0.0.0.0:123` — same wildcard problem for NTP.
+> 3. WSL2 mirrored networking (which would have sidestepped the above) is
+>    Windows 11 only.
+
+**The rig now runs inside a Linux host of the operator's choice.** Concretely:
+
+- A small **Linux VM in Hyper-V** with a Hyper-V **external switch** bound
+  to the cabled NIC (e.g. `Ethernet 2` on this dev box). The VM owns that
+  NIC at the link layer; Windows doesn't see it; no host port conflict.
+- Inside the VM: `docker compose up` runs the rig. Containers use
+  `--network host` (Linux host networking, NOT Docker-Desktop's
+  pseudo-host) and bind directly on the cabled NIC at `DNS_PRIMARY_IP`,
+  optionally `DNS_SECONDARY_IP`, and `NTP_BIND_IP`.
+- IP aliases on the VM's NIC are added by `scripts/setup-host-nic.sh`
+  (bash; runs inside the VM).
+- **No port forwarding, no relay, no portproxy.** Chunk 6 from the
+  original plan is dropped.
+
+**Alternative hosts** (rig is host-agnostic Linux): a dedicated Pi 4 / NUC /
+spare laptop wired to the device works identically. The only Windows-specific
+piece is the one-time Hyper-V external-switch + VM provisioning, documented
+in the README.
+
+### Spike findings (2026-05-08)
+
+| Probe | Result |
+|---|---|
+| WSL version + mirrored mode | WSL 2.6.3.0 on Win10 Pro 19045 — mirrored mode unavailable (Win11+ only) |
+| Docker Desktop UDP forwarding to host alias | Untested directly — pre-empted by host port conflict below |
+| `0.0.0.0:53/udp` ownership | PID 4716 = `svchost / SharedAccess` (ICS / Hyper-V Default Switch DNS proxy) |
+| `0.0.0.0:123/udp` ownership | PID 18924 = `svchost / W32Time` (Windows Time service) |
+| Hyper-V availability | Enabled (`vEthernet (Default Switch)` Up); external switch creation viable |
+| Cabled-test NICs available | `Ethernet 2` (Intel I211 GbE) and `Ethernet 3` (Realtek USB GbE) — both currently disconnected |
 
 ---
 
@@ -205,24 +242,29 @@ ${NTP_BIND_IP}` record is added only when `NTP_TARGET` is a FQDN.
 chrony template: binds on `${NTP_BIND_IP}`, no upstream pool, fixed local-
 clock stratum (default 5), `allow ${NODE_SUBNET}`. No keyfile, no NTS.
 
-### 4. **[ADD]** `docker-compose.yml`
+### 4. **[ADD]** `docker-compose.yml` *(revised post-spike)*
 
-Brings up DNS + NTP services. Reads `.env` directly. NTP container gets a
-static IP equal to `NTP_BIND_IP` on a user-defined Docker network. DHCP
-service lives behind a `--profile dhcp` flag (opt-in, only if Q-IP requires).
+Brings up DNS + NTP services. Reads `.env` directly. **Both services use
+`network_mode: host`** so they bind directly on the Linux host's NIC at
+`DNS_PRIMARY_IP` / `DNS_SECONDARY_IP` / `NTP_BIND_IP`. No user-defined
+Docker network, no port mapping (host-mode bypasses `ports:` anyway).
+DHCP service (if Q-IP requires) goes behind a `--profile dhcp` flag.
 
-### 5. **[ADD]** `scripts/setup-host-nic.ps1`
+### 5. **[ADD]** `scripts/setup-host-nic.sh` *(revised post-spike)*
 
-PowerShell script that reads `.env`, adds `DNS_PRIMARY_IP`, optionally
-`DNS_SECONDARY_IP`, and (if needed) `NTP_BIND_IP` as aliases on
-`HOST_NIC_NAME`. Idempotent — re-running is safe. Removes aliases on
-`-Teardown`.
+Bash script (runs **inside the Linux host** — a Hyper-V VM, dedicated Linux
+box, etc.) that reads `.env` and adds `DNS_PRIMARY_IP`, optionally
+`DNS_SECONDARY_IP`, and `NTP_BIND_IP` as IP aliases on the host's NIC
+(`HOST_NIC_NAME` interpreted as a Linux interface name, e.g. `eth0`).
+Uses `ip addr add ... dev ${HOST_NIC_NAME}`. Idempotent. Tear-down via
+`--teardown`.
 
-### 6. **[ADD]** `scripts/forward-to-wsl.ps1`
+### 6. *(DROPPED post-spike)* — port forwarding no longer needed
 
-`netsh interface portproxy` rules to forward UDP/53 (from each configured
-DNS IP) and UDP/123 (from `NTP_BIND_IP`) into the WSL2-hosted container.
-Or — if the spike finds a cleaner direct-binding path — replace with that.
+The original chunk 6 was a `netsh portproxy` script for routing UDP/53
+and UDP/123 from Windows alias IPs into a WSL2 container. The Linux-host
+architecture binds directly via `--network host`, so no proxy exists.
+Skipping this chunk and renumbering 7–9 below.
 
 ### 7. **[ADD]** `scripts/verify.ps1` (or `verify.sh` in WSL2)
 
