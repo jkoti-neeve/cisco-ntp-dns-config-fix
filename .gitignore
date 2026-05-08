@@ -1,3 +1,8 @@
+# Bench-test rig — runtime artifacts (per-operator, per-run; never committed)
+.env
+out/
+*.pcap
+
 # AI Dev Framework — infrastructure (pulled from framework repo, not committed)
 # Project knowledge files travel across devs (plans, handoffs, plan-impl reports,
 # context, config, lessons, roadmap). Per-dev / framework-shipped files don't.

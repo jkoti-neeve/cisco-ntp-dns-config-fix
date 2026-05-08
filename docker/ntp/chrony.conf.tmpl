@@ -1,0 +1,26 @@
+# chrony as authoritative NTP server — generated from .env by
+# scripts/render-config.sh.
+#
+# Posture:
+# - No upstream peers (we are isolated on the bench cable).
+# - Serve at a stable local stratum so clients accept our time.
+# - Allow only the device subnet — no accidental broader exposure.
+# - No authentication (Q-AUTH closed: plain NTP).
+
+# Bind only on the IP the device expects to reach for NTP.
+bindaddress ${NTP_BIND_IP}
+
+# Use the host clock as our reference, declared at stratum 5.
+# `local` makes chrony serve time even with no upstream synced source.
+local stratum 5
+
+# Only respond to clients on the device's subnet.
+allow ${NODE_SUBNET}
+
+# Don't try to discipline our own clock against any external source.
+manual
+
+# Logging — useful when diagnosing the trust-progression check
+# (initial fast burst → 32 s → 64 s → 128 s back-off).
+logdir /var/log/chrony
+log measurements statistics tracking
