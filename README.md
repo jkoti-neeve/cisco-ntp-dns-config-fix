@@ -51,8 +51,7 @@ edit.
 
 | | |
 |---|---|
-| Implemented | `.env` schema + `render-config.sh` (validates, renders Corefile/zone/chrony.conf), `docker-compose.yml`, `docker/ntp/Dockerfile`, `scripts/setup-host-nic.sh`, this README |
-| Not yet implemented | `scripts/verify.sh` — automated pass/fail (currently you observe manually with `docker logs` + `tcpdump`). Tracked as plan chunk 7. |
+| Implemented | `.env` schema + `render-config.sh` (validates, renders Corefile/zone/chrony.conf), `docker-compose.yml`, `docker/ntp/Dockerfile`, `scripts/setup-host-nic.sh`, `scripts/verify.sh` (automated pass/fail), this README |
 | Open device-side facts | `Q-IP` (static or DHCP? expected node IP/subnet?), `Q-DNS` (the actual primary + backup DNS IPs), `Q-EXTRA` (other names the node may query). The rig accepts these as `.env` inputs at cable-up — no source edits. |
 
 See `.ai/plans/2026-05-08-1322-jkoti-neeve-scope-cisco-ntp-dns-planning.md`
@@ -132,14 +131,18 @@ hostname (e.g. `ntp-dns-bench`) and enable OpenSSH. After install, log in.
 ### 3 — Inside the VM: install Docker + tools
 
 ```bash
-# Update + base tools
-sudo apt update && sudo apt install -y ca-certificates curl gettext-base git iproute2 tcpdump
+# Update + base tools (tshark + jq are used by scripts/verify.sh)
+sudo apt update && sudo apt install -y \
+    ca-certificates curl gettext-base git iproute2 tcpdump tshark jq
 
 # Docker (official convenience script)
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker "$USER"
 # Log out + back in (or `newgrp docker`) for the group change to take effect.
 ```
+
+> `tshark` install asks at debconf time whether non-superusers can capture
+> packets. Either is fine — `verify.sh` runs as root.
 
 Verify Docker:
 
@@ -236,18 +239,27 @@ check that the VM has internet (NIC 1 = Default Switch).
 
 The device sees its preconfigured DNS/NTP IPs respond on the link.
 
-### 6 — Observe (manual, until verify.sh lands)
+### 6 — Observe / verify
 
-In one terminal — DNS query log:
+Automated:
 
 ```bash
-docker compose logs -f dns
+sudo bash scripts/verify.sh                    # 60 s capture + assertions
+sudo bash scripts/verify.sh --duration 300     # longer (recommended for
+                                               # observing chrony's back-off
+                                               # 32 s -> 64 s -> 128 s)
 ```
 
-In a second terminal — NTP packet capture:
+`verify.sh` captures DNS log + UDP/123 pcap into `out/run/<run-id>/`,
+asserts protocol-correctness for the active config-matrix case (A/B/C/D),
+runs the chrony trust-progression check, and prints a green/red summary.
+Outputs a machine-readable `summary.json` alongside the pcap for archival.
+
+Manual (when verify.sh can't run, or for live observation):
 
 ```bash
-sudo tcpdump -i "$HOST_NIC_NAME" -n udp port 123
+docker compose logs -f dns                     # in one terminal
+sudo tcpdump -i "$HOST_NIC_NAME" -n udp port 123  # in another
 ```
 
 Pass criteria (black-box, since we have no shell on the device — Q-DIAG):
@@ -333,5 +345,4 @@ out/render/                           # (gitignored) runtime-rendered configs
 
 ## What's coming
 
-- **`scripts/verify.sh`** (chunk 7) — automated pass/fail script that captures DNS log + NTP pcap, runs the trust-progression check, and prints a green/red summary. Until then, observe manually as in step 6 above.
 - **DHCP service** — only if `Q-IP` closes as DHCP. Will live behind a `--profile dhcp` compose flag.
