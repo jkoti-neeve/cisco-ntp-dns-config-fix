@@ -1,0 +1,34 @@
+# Bench-test rig — DNS + NTP simulation for one preconfigured device.
+#
+# Run from the project root after `bash scripts/render-config.sh`:
+#   sudo bash scripts/setup-host-nic.sh   # bind alias IPs on the host NIC
+#   docker compose up -d                  # bring up DNS + NTP
+#
+# Both services use `network_mode: host` and bind on the IPs the operator
+# configured in `.env` (DNS_PRIMARY_IP / DNS_SECONDARY_IP / NTP_BIND_IP).
+# This is a Linux-host architecture: run inside a Hyper-V VM, dedicated
+# Linux box, etc. Docker Desktop on Windows will NOT work — the Windows
+# host owns UDP/53 (ICS) and UDP/123 (W32Time) on a wildcard listener,
+# blocking the rig's binds. See `.ai/plans/...-scope-cisco-ntp-dns-planning.md`.
+
+services:
+  dns:
+    image: coredns/coredns:1.11.3
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./out/render/dns/Corefile:/etc/coredns/Corefile:ro
+      - ./out/render/dns/zones:/etc/coredns/zones:ro
+    command: ["-conf", "/etc/coredns/Corefile"]
+    # CoreDNS logs every query to stdout via the `log` plugin (Corefile.tmpl).
+    # Capture during runs with `docker compose logs -f dns | tee out/run/dns.log`.
+
+  ntp:
+    build: ./docker/ntp
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./out/render/ntp/chrony.conf:/etc/chrony/chrony.conf:ro
+    # No cap_add — chrony.conf uses `manual` (no clock discipline), so
+    # CAP_SYS_TIME is not needed. Binding UDP/123 is allowed by default
+    # since containers run as root.

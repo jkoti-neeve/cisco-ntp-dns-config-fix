@@ -122,14 +122,17 @@ envsubst '${NTP_RECORD_LINE}' \
 envsubst '${NTP_BIND_IP} ${NODE_SUBNET}' \
     < "$REPO_ROOT/docker/ntp/chrony.conf.tmpl" > "$OUT/ntp/chrony.conf"
 
-# Host-side outputs — NIC alias list (Windows scripts read this).
+# Host-side outputs — NIC alias list (consumed by scripts/setup-host-nic.sh).
+# Under the Linux-host architecture (post-spike), every rig-bound IP must be
+# an alias on the Linux host's NIC: the DNS listener IP(s) AND the NTP
+# listener IP, since containers run with `network_mode: host` and bind
+# directly on the host's interface.
 {
     printf '# Generated from %s — IPs to bind as aliases on host NIC %q\n' \
         "$ENV_FILE" "$HOST_NIC_NAME"
     printf '%s\n' "$DNS_PRIMARY_IP"
     [[ -n "$DNS_SECONDARY_IP" ]] && printf '%s\n' "$DNS_SECONDARY_IP"
-    # NTP_BIND_IP is bound on the WSL2/container side, NOT the host NIC,
-    # so it is intentionally absent from this list.
+    printf '%s\n' "$NTP_BIND_IP"
 } > "$OUT/host/aliases.txt"
 
 # Host-side outputs — abstract bindings.
