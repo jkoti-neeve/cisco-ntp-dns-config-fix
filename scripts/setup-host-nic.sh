@@ -58,11 +58,40 @@ set +a
 : "${HOST_NIC_NAME:?HOST_NIC_NAME must be set in $ENV_FILE}"
 : "${NODE_SUBNET:?NODE_SUBNET must be set in $ENV_FILE}"
 
-# Use NODE_SUBNET's prefix length for all aliases (so packets to the
-# device's subnet route via this interface).
+# Per-IP prefix selection: in-subnet aliases use NODE_SUBNET's prefix so
+# the kernel installs the link's connected route; out-of-subnet aliases
+# (e.g., an operator's preconfigured DNS server in public address space)
+# use /32 so we don't claim a connected route into someone else's range.
 PREFIX="${NODE_SUBNET##*/}"
 [[ "$PREFIX" =~ ^[0-9]+$ && "$PREFIX" -ge 1 && "$PREFIX" -le 32 ]] \
     || die "NODE_SUBNET must be in CIDR form with /1..32 prefix (got: $NODE_SUBNET)"
+
+ip_to_int() {
+    local IFS=.
+    # shellcheck disable=SC2086
+    set -- $1
+    printf '%d\n' "$(( ($1 << 24) | ($2 << 16) | ($3 << 8) | $4 ))"
+}
+
+ip_in_cidr() {
+    # Returns 0 iff $1 (dotted-quad) is inside $2 (CIDR).
+    local ip="$1" cidr="$2"
+    local subnet="${cidr%/*}" prefix="${cidr##*/}"
+    local ip_int subnet_int mask
+    (( prefix == 0 )) && return 0
+    ip_int="$(ip_to_int "$ip")"
+    subnet_int="$(ip_to_int "$subnet")"
+    mask=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
+    (( (ip_int & mask) == (subnet_int & mask) ))
+}
+
+prefix_for_ip() {
+    if ip_in_cidr "$1" "$NODE_SUBNET"; then
+        printf '%s\n' "$PREFIX"
+    else
+        printf '32\n'
+    fi
+}
 
 ip link show "$HOST_NIC_NAME" >/dev/null 2>&1 \
     || die "NIC '$HOST_NIC_NAME' not found on this host. Check 'ip link show'."
@@ -80,14 +109,15 @@ done < "$ALIASES_FILE"
 # ── Apply ──────────────────────────────────────────────────────────
 case "$MODE" in
     add)
-        printf 'setup-host-nic: adding %d alias(es) to %q with prefix /%s\n' \
+        printf 'setup-host-nic: adding %d alias(es) to %q (in-subnet -> /%s, out-of-subnet -> /32)\n' \
             "${#ips[@]}" "$HOST_NIC_NAME" "$PREFIX"
         for ip in "${ips[@]}"; do
+            p="$(prefix_for_ip "$ip")"
             if ip -o -4 addr show dev "$HOST_NIC_NAME" | grep -qE "inet ${ip//./\\.}/"; then
                 printf '  skip   %s (already bound)\n' "$ip"
             else
-                ip addr add "$ip/$PREFIX" dev "$HOST_NIC_NAME"
-                printf '  add    %s/%s\n' "$ip" "$PREFIX"
+                ip addr add "$ip/$p" dev "$HOST_NIC_NAME"
+                printf '  add    %s/%s\n' "$ip" "$p"
             fi
         done
         ;;
@@ -95,9 +125,10 @@ case "$MODE" in
         printf 'setup-host-nic: removing %d alias(es) from %q\n' \
             "${#ips[@]}" "$HOST_NIC_NAME"
         for ip in "${ips[@]}"; do
+            p="$(prefix_for_ip "$ip")"
             if ip -o -4 addr show dev "$HOST_NIC_NAME" | grep -qE "inet ${ip//./\\.}/"; then
-                ip addr del "$ip/$PREFIX" dev "$HOST_NIC_NAME"
-                printf '  remove %s/%s\n' "$ip" "$PREFIX"
+                ip addr del "$ip/$p" dev "$HOST_NIC_NAME"
+                printf '  remove %s/%s\n' "$ip" "$p"
             else
                 printf '  skip   %s (not bound)\n' "$ip"
             fi
