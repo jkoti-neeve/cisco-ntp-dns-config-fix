@@ -27,8 +27,21 @@ The bench-test rig (Neeve-node NTP/DNS simulator) is **implementation-complete**
 | ID | Question | Status |
 |----|----------|--------|
 | **Q-IP** | Static IP or DHCP? expected IP / subnet? | **CLOSED 2026-05-08 20:35 EDT — DHCP**. Passive 15s tcpdump on eth1 captured `BOOTP/DHCP, Request from cc:82:7f:91:75:6f` (Advantech OUI) — node broadcasts DHCP DISCOVER on its WAN port. No static IP. Subnet is whatever the rig's DHCP server hands out (the rig picks). |
-| **Q-DNS** | Exact DNS primary + backup IPs the node is preconfigured with? | Open. Will be observable once the node has a DHCP lease and starts querying DNS. If it uses DHCP option-6-supplied DNS, we'll see it query at our advertised IP; if it ignores DHCP DNS and uses preconfigured IPs, we'll see queries to a different destination — that destination IS the answer. |
-| **Q-EXTRA** | Other DNS names the node queries beyond `ntp2.wbg.org`? | Open. dnsmasq's `log-queries=extra` records every query; iterate `seed.hosts` as new names appear. |
+| **Q-DNS** | Exact DNS primary + backup IPs the node is preconfigured with? | **CLOSED 2026-05-09 (operator-side disclosure)** — `DNS_PRIMARY_IP=138.220.4.4`, `DNS_SECONDARY_IP=138.220.8.8`. Both are public-space IPs (138.220.0.0/16), out of the link subnet `192.168.50.0/24` — see "Architectural implication" below. Behavioral confirmation (device actually queries these IPs over the link) still pending; will be observed in chunk 4. |
+| **Q-EXTRA** | Other DNS names the node queries beyond `ntp2.wbg.org`? | Open. dnsmasq's `log-queries=extra` records every query; iterate `seed.hosts` as new names appear. NTP target confirmed by operator as `ntp2.wbg.org` (FQDN — DNS spoof path applies). |
+
+### Architectural implication (Q-DNS public-space resolution)
+
+The disclosed DNS IPs (`138.220.4.4`, `138.220.8.8`) are NOT inside the link subnet `192.168.50.0/24`. The rig still works, but the routing has an extra hop:
+
+1. Device boots, DHCP lease arrives in `192.168.50.0/24` (e.g., `192.168.50.172`).
+2. Device wants to query `138.220.4.4` → not on-link → routes via DHCP-supplied default gateway.
+3. Default gateway must be a rig-owned IP **in-subnet** (e.g., `192.168.50.1`), so the device can ARP-resolve it on eth1.
+4. Rig kernel receives the packet on eth1, sees `138.220.4.4` is locally configured (aliased), delivers to dnsmasq.
+
+This means `DHCP_GATEWAY_IP` MUST be set explicitly to an in-subnet IP — it can no longer default to `DNS_PRIMARY_IP` (the prior assumption broke when DNS IPs went out-of-subnet).
+
+`setup-host-nic.sh` uses ONE prefix for all aliases (taken from `NODE_SUBNET`, currently `/24`). Aliasing `138.220.4.4/24` on eth1 installs a spurious connected route `138.220.4.0/24 dev eth1`. This is harmless on the air-gapped cable to the device, but will need a follow-up if the rig is ever deployed somewhere with an upstream that legitimately routes 138.220.x.x. **Carry-forward TODO**: optionally modify `setup-host-nic.sh` to use `/32` for aliases that fall outside `NODE_SUBNET`.
 
 ---
 
