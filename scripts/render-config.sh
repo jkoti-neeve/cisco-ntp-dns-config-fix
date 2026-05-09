@@ -96,6 +96,7 @@ set +a
 # Optional — normalize empty/unset to empty.
 DNS_SECONDARY_IP="${DNS_SECONDARY_IP:-}"
 DHCP_GATEWAY_IP="${DHCP_GATEWAY_IP:-}"
+DHCP_DOMAIN_NAME="${DHCP_DOMAIN_NAME:-}"
 
 # ── Validate values ────────────────────────────────────────────────
 is_ipv4 "$DNS_PRIMARY_IP"   || die "DNS_PRIMARY_IP is not a valid IPv4: $DNS_PRIMARY_IP"
@@ -115,6 +116,11 @@ is_lease_time "$DHCP_LEASE_TIME" \
 
 [[ -n "$DHCP_GATEWAY_IP" ]] && {
     is_ipv4 "$DHCP_GATEWAY_IP" || die "DHCP_GATEWAY_IP is not a valid IPv4: $DHCP_GATEWAY_IP"
+}
+
+[[ -n "$DHCP_DOMAIN_NAME" ]] && {
+    is_fqdn "$DHCP_DOMAIN_NAME" \
+        || die "DHCP_DOMAIN_NAME is not a valid domain (e.g., wbg.org): $DHCP_DOMAIN_NAME"
 }
 
 if is_ipv4 "$NTP_TARGET"; then
@@ -150,15 +156,21 @@ else
     NTP_RECORD_LINE="# NTP_TARGET is an IP literal ($NTP_TARGET) — no DNS A-record needed."
 fi
 
+if [[ -n "$DHCP_DOMAIN_NAME" ]]; then
+    DHCP_DOMAIN_LINE="dhcp-option=option:domain-name,$DHCP_DOMAIN_NAME"
+else
+    DHCP_DOMAIN_LINE="# DHCP_DOMAIN_NAME not set — option 15 (domain-name) omitted."
+fi
+
 export DNS_PRIMARY_IP DNS_SECONDARY_IP NTP_TARGET NTP_BIND_IP HOST_NIC_NAME NODE_SUBNET
-export DHCP_RANGE_START DHCP_RANGE_END DHCP_LEASE_TIME DHCP_GATEWAY_IP
-export DNS_LISTEN_LINES DHCP_DNS_SERVERS NTP_RECORD_LINE NTP_TARGET_KIND
+export DHCP_RANGE_START DHCP_RANGE_END DHCP_LEASE_TIME DHCP_GATEWAY_IP DHCP_DOMAIN_NAME
+export DNS_LISTEN_LINES DHCP_DNS_SERVERS NTP_RECORD_LINE NTP_TARGET_KIND DHCP_DOMAIN_LINE
 
 # ── Render ─────────────────────────────────────────────────────────
 rm -rf "$OUT"
 mkdir -p "$OUT/dns/zones" "$OUT/ntp" "$OUT/host"
 
-envsubst '${DNS_LISTEN_LINES} ${HOST_NIC_NAME} ${DHCP_RANGE_START} ${DHCP_RANGE_END} ${DHCP_LEASE_TIME} ${DHCP_DNS_SERVERS} ${DHCP_GATEWAY_IP}' \
+envsubst '${DNS_LISTEN_LINES} ${HOST_NIC_NAME} ${DHCP_RANGE_START} ${DHCP_RANGE_END} ${DHCP_LEASE_TIME} ${DHCP_DNS_SERVERS} ${DHCP_GATEWAY_IP} ${DHCP_DOMAIN_LINE}' \
     < "$REPO_ROOT/docker/dns/dnsmasq.conf.tmpl" > "$OUT/dns/dnsmasq.conf"
 
 envsubst '${NTP_RECORD_LINE}' \
@@ -209,4 +221,9 @@ printf '  NTP listen      : %s (allow %s)\n' "$NTP_BIND_IP" "$NODE_SUBNET"
 printf '  DHCP pool       : %s..%s, lease %s\n' "$DHCP_RANGE_START" "$DHCP_RANGE_END" "$DHCP_LEASE_TIME"
 printf '  DHCP option 6   : DNS = %s\n' "$DHCP_DNS_SERVERS"
 printf '  DHCP option 3   : router = %s\n' "$DHCP_GATEWAY_IP"
+if [[ -n "$DHCP_DOMAIN_NAME" ]]; then
+    printf '  DHCP option 15  : domain-name = %s\n' "$DHCP_DOMAIN_NAME"
+else
+    printf '  DHCP option 15  : (omitted — DHCP_DOMAIN_NAME not set)\n'
+fi
 printf '  Host NIC        : %s (alias IPs: see %s)\n' "$HOST_NIC_NAME" "$OUT/host/aliases.txt"

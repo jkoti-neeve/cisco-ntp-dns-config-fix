@@ -27,6 +27,7 @@ interface=${HOST_NIC_NAME}
 dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},${DHCP_LEASE_TIME}
 dhcp-option=option:dns-server,${DHCP_DNS_SERVERS}
 dhcp-option=option:router,${DHCP_GATEWAY_IP}
+${DHCP_DOMAIN_LINE}
 dhcp-authoritative   # we're the only DHCP on this closed link
 
 # ── Logging ─────────────────────────────────────────────────────────
