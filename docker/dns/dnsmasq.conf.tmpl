@@ -1,0 +1,35 @@
+# dnsmasq — DNS + DHCP for the bench-test rig.
+# Generated from .env by scripts/render-config.sh.
+#
+# Roles on the cabled link:
+# - DNS:  bind on DNS_PRIMARY_IP (and DNS_SECONDARY_IP if set), answer
+#         from seed.hosts, log every query (capture-then-respond).
+# - DHCP: serve leases from DHCP_RANGE_START..DHCP_RANGE_END, hand out
+#         option 6 (DNS) = the rig's DNS IPs, option 3 (router) =
+#         DHCP_GATEWAY_IP.
+
+# ── Isolation ───────────────────────────────────────────────────────
+no-resolv          # never read /etc/resolv.conf or query upstream
+no-poll            # don't poll for system DNS changes
+no-hosts           # don't read the container's own /etc/hosts
+
+# ── DNS ─────────────────────────────────────────────────────────────
+${DNS_LISTEN_LINES}
+bind-interfaces    # bind only to the listen-address IPs, not 0.0.0.0
+
+# Editable seed records (hosts(5) format). Re-read on SIGHUP or
+# `docker compose restart dns`. Append rows as the device reveals
+# new names in the query log.
+addn-hosts=/etc/dnsmasq.d/seed.hosts
+
+# ── DHCP ────────────────────────────────────────────────────────────
+interface=${HOST_NIC_NAME}
+dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},${DHCP_LEASE_TIME}
+dhcp-option=option:dns-server,${DHCP_DNS_SERVERS}
+dhcp-option=option:router,${DHCP_GATEWAY_IP}
+dhcp-authoritative   # we're the only DHCP on this closed link
+
+# ── Logging ─────────────────────────────────────────────────────────
+log-queries=extra  # one line per DNS query (with client IP)
+log-dhcp           # one line per DHCP DISCOVER/OFFER/REQUEST/ACK
+log-facility=-     # stdout — so `docker compose logs dns` captures it

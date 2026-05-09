@@ -1,10 +1,11 @@
 # cisco-ntp-dns
 
-Bench-test rig that simulates the **NTP** and **DNS** servers a single
-preconfigured device expects to talk to. Connect the device to a Linux
-host over a direct Cat6 cable; run two Docker containers (CoreDNS +
-chrony) that respond on the IPs the device's preconfig points at; verify
-the device's NTP/DNS client is healthy.
+Bench-test rig that simulates the **NTP**, **DNS**, and **DHCP** servers
+a single preconfigured device expects to talk to. Connect the device to
+a Linux host over a direct Cat6 cable; run two Docker containers
+(dnsmasq + chrony) that hand out a lease and respond on the IPs the
+device's preconfig points at; verify the device's NTP/DNS client is
+healthy.
 
 > **Naming note**: the directory is `cisco-ntp-dns` for historical reasons.
 > No Cisco hardware is involved — the first device under test is a Neeve
@@ -38,12 +39,12 @@ A small Docker stack of two services:
 
 | Service | Image | Listens on | Purpose |
 |---|---|---|---|
-| `dns` | `coredns/coredns:1.11.3` | UDP/53 at `DNS_PRIMARY_IP` (and `DNS_SECONDARY_IP` if set) | Captures every DNS query the device makes; answers the seed records (notably the NTP target's A-record) and NXDOMAIN's the rest. Edit the seed file at runtime to add records as the device reveals what it asks for. |
+| `dns` | `alpine:3.20` + dnsmasq | UDP/53 at `DNS_PRIMARY_IP` (and `DNS_SECONDARY_IP` if set); UDP/67 (DHCP) on `HOST_NIC_NAME` | DHCP server (leases from `DHCP_RANGE_START..END`, hands out option 6 = DNS IP, option 3 = gateway) AND DNS server. Captures every query, answers from seed records (notably the NTP target's A-record), NXDOMAIN's the rest. Edit the seed file at runtime to add records as the device reveals what it asks for. |
 | `ntp` | `alpine:3.20` + chrony | UDP/123 at `NTP_BIND_IP` | Authoritative NTP server at a stable local stratum (5) with no upstream peers. Allows only `NODE_SUBNET`. No authentication. |
 
-Per-device values (1–2 DNS IPs, NTP target, NIC name, subnet) live in
-`.env`. The rig is generic — pointing at a different device is an `.env`
-edit.
+Per-device values (1–2 DNS IPs, NTP target, DHCP pool, NIC name, subnet)
+live in `.env`. The rig is generic — pointing at a different device is
+an `.env` edit.
 
 ---
 
@@ -51,8 +52,8 @@ edit.
 
 | | |
 |---|---|
-| Implemented | `.env` schema + `render-config.sh` (validates, renders Corefile/zone/chrony.conf), `docker-compose.yml`, `docker/ntp/Dockerfile`, `scripts/setup-host-nic.sh`, `scripts/verify.sh` (automated pass/fail), this README |
-| Open device-side facts | `Q-IP` (static or DHCP? expected node IP/subnet?), `Q-DNS` (the actual primary + backup DNS IPs), `Q-EXTRA` (other names the node may query). The rig accepts these as `.env` inputs at cable-up — no source edits. |
+| Implemented | `.env` schema + `render-config.sh` (validates, renders dnsmasq.conf/seed.hosts/chrony.conf), `docker-compose.yml`, `docker/dns/Dockerfile` (Alpine + dnsmasq), `docker/ntp/Dockerfile`, `scripts/setup-host-nic.sh`, `scripts/verify.sh` (automated pass/fail incl. DHCP assertion), this README |
+| Open device-side facts | `Q-DNS` (whether the node uses DHCP-supplied DNS or preconfigured IPs), `Q-EXTRA` (other names the node may query). `Q-IP` closed 2026-05-08: device is a DHCP client on its WAN port. The rig accepts everything as `.env` inputs at cable-up — no source edits. |
 
 See `.ai/plans/2026-05-08-1322-jkoti-neeve-scope-cisco-ntp-dns-planning.md`
 for the full plan, configuration matrix (4 cases), and open questions.
@@ -61,8 +62,9 @@ for the full plan, configuration matrix (4 cases), and open questions.
 
 ## Why a Linux host (not Windows directly)
 
-The rig must bind UDP/53 and UDP/123. On Windows, both ports are owned
-by wildcard (`0.0.0.0`) listeners that catch traffic to every local IP:
+The rig must bind UDP/53, UDP/67 (DHCP), and UDP/123. On Windows,
+several of these ports are owned by wildcard (`0.0.0.0`) listeners that
+catch traffic to every local IP:
 
 - **`SharedAccess`** (Internet Connection Sharing / Hyper-V Default Switch
   DNS proxy) on UDP/53
@@ -184,12 +186,15 @@ Set:
 
 | Var | Value |
 |---|---|
-| `DNS_PRIMARY_IP` | The primary DNS IP the device's preconfig points at |
+| `DNS_PRIMARY_IP` | The primary DNS IP the device's preconfig points at (also handed out via DHCP option 6) |
 | `DNS_SECONDARY_IP` | The backup DNS IP, if the device has one (leave blank otherwise) |
 | `NTP_TARGET` | The NTP target — FQDN (e.g. `ntp2.wbg.org`) **or** IP literal |
 | `NTP_BIND_IP` | The IP the chrony container binds. If `NTP_TARGET` is a FQDN, our DNS hands out this IP. If `NTP_TARGET` is an IP literal, set this to the same value. |
 | `HOST_NIC_NAME` | The Linux interface name of the cabled NIC (from step 5 above) |
-| `NODE_SUBNET` | CIDR of the subnet the device lives on, e.g. `10.0.0.0/24` |
+| `NODE_SUBNET` | CIDR of the subnet the device lives on, e.g. `192.168.50.0/24`. All rig IPs and the DHCP range below MUST be inside this subnet. |
+| `DHCP_RANGE_START` / `DHCP_RANGE_END` | Lease-pool bounds (inclusive). Inside `NODE_SUBNET`, must not collide with rig IPs. |
+| `DHCP_LEASE_TIME` | Lease lifetime, e.g. `10m`, `2h`, `1d`, or `infinite`. Short leases are usually right for bench testing. |
+| `DHCP_GATEWAY_IP` | IP advertised as default gateway (DHCP option 3). Leave blank to default to `DNS_PRIMARY_IP`. |
 
 ### 2 — Render the runtime configs
 
@@ -202,8 +207,8 @@ Validates the `.env` and writes:
 ```
 out/render/
 ├── dns/
-│   ├── Corefile
-│   └── zones/seed.hosts
+│   ├── dnsmasq.conf       # DNS + DHCP config
+│   └── zones/seed.hosts   # editable hosts(5) records (addn-hosts)
 ├── ntp/
 │   └── chrony.conf
 └── host/
@@ -287,11 +292,14 @@ sudo bash scripts/setup-host-nic.sh --teardown
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `docker compose up` complains about port 53 already in use | The VM has `systemd-resolved` listening on `127.0.0.53:53` (Ubuntu default) AND your `DNS_PRIMARY_IP` happens to also be `127.0.0.53` | Don't use `127.0.0.53` for the rig. If you must, disable `systemd-resolved` (`sudo systemctl disable --now systemd-resolved`) and replace `/etc/resolv.conf`. |
+| `docker compose up` complains about port 67 already in use | The VM has a native DHCP client/server bound to UDP/67 (rare on a server; happens with `isc-dhcp-server` or some `dnsmasq` host installs) | `sudo ss -lnpu sport = :67` to identify the holder; disable it (`sudo systemctl disable --now isc-dhcp-server` or similar). |
 | `docker compose up` complains about port 123 already in use | The VM has `chrony` or `ntpd` running natively | `sudo systemctl disable --now chrony` (or `ntp`). The rig's chrony runs in the container, not on the host. |
 | `setup-host-nic.sh` says "NIC '...' not found" | `HOST_NIC_NAME` in `.env` doesn't match the actual interface name | Run `ip link show` and copy the exact name |
-| DNS log shows no queries from the device | The device probably isn't reaching us. Possible causes: cable not connected; alias IPs aren't on the right NIC; `NODE_SUBNET` doesn't include the device's IP | `ip addr show dev $HOST_NIC_NAME` to confirm aliases. `tcpdump -i $HOST_NIC_NAME -n` to see if any traffic arrives at all. |
+| DNS log shows no DHCP traffic from the device | The device isn't reaching us. Causes: cable not connected, link-state not UP on `HOST_NIC_NAME`, the cabled NIC isn't really inside the VM | `ip -br link show $HOST_NIC_NAME` (must be UP), `sudo tcpdump -i $HOST_NIC_NAME -nn -e -p` to see if any traffic arrives at all (DHCP DISCOVER is broadcast — non-promisc tcpdump catches it). |
+| DHCPDISCOVER seen but no DHCPACK | dnsmasq isn't accepting/can't satisfy the lease | Check `out/render/dns/dnsmasq.conf` has `dhcp-range=` matching `NODE_SUBNET`. Check `docker compose logs dns` for parse errors. |
+| DNS log shows DHCP lease but no DNS queries | Device may be using preconfigured DNS IPs that aren't on this link (Q-DNS) | Watch `tcpdump -i $HOST_NIC_NAME -nn 'udp port 53'` to find the destination IPs the device queries. Add those IPs to `.env` as DNS_PRIMARY_IP / DNS_SECONDARY_IP and re-deploy. |
 | DNS log shows queries answered but NTP shows no exchange | The DNS A-record isn't pointing where the device expects, or the device's chrony is rejecting our responses | Check `out/render/dns/zones/seed.hosts` has `${NTP_BIND_IP} ${NTP_TARGET}`. Check chrony logs: `docker compose logs ntp`. Stratum mismatches and time skew can cause client rejection. |
-| Device queries names we don't have records for | Capture-then-respond: that's by design. Look at the DNS log, decide which names should resolve, and append `<IP> <name>` lines to `out/render/dns/zones/seed.hosts`. CoreDNS reloads the file automatically. |
+| Device queries names we don't have records for | Capture-then-respond: that's by design. Look at the DNS log, decide which names should resolve, and append `<IP> <name>` lines to `out/render/dns/zones/seed.hosts`. Reload with `docker compose restart dns`. |
 
 ---
 
@@ -309,7 +317,8 @@ sudo bash scripts/setup-host-nic.sh --teardown
 │ - NTP target    │                  │  alias IPs (DNS_*, NTP)│
 └─────────────────┘                  │                        │
                                      │  Docker:               │
-                                     │   - CoreDNS host-mode  │
+                                     │   - dnsmasq host-mode  │
+                                     │     (DNS + DHCP)       │
                                      │   - chrony  host-mode  │
                                      └────────────────────────┘
                                                  ▲
@@ -328,11 +337,13 @@ sudo bash scripts/setup-host-nic.sh --teardown
 .env                                  # (gitignored) operator's filled config
 scripts/
 ├── render-config.sh                  # validate .env + render runtime configs
-└── setup-host-nic.sh                 # bind alias IPs on the cabled NIC
+├── setup-host-nic.sh                 # bind alias IPs on the cabled NIC
+└── verify.sh                         # automated pass/fail (DHCP+DNS+NTP)
 docker/
 ├── dns/
-│   ├── Corefile.tmpl                 # CoreDNS template
-│   └── zones/seed.hosts.tmpl         # DNS records template
+│   ├── Dockerfile                    # Alpine + dnsmasq
+│   ├── dnsmasq.conf.tmpl             # DNS + DHCP config template
+│   └── zones/seed.hosts.tmpl         # editable DNS records (addn-hosts)
 └── ntp/
     ├── Dockerfile                    # Alpine + chrony
     └── chrony.conf.tmpl              # chrony template
@@ -345,4 +356,4 @@ out/render/                           # (gitignored) runtime-rendered configs
 
 ## What's coming
 
-- **DHCP service** — only if `Q-IP` closes as DHCP. Will live behind a `--profile dhcp` compose flag.
+- **Q-DNS / Q-EXTRA closure** — pending the first cable-up against the 2484. The DHCP server is in place; observing DNS queries that follow the lease will reveal whether the node honors DHCP-supplied DNS (option 6) or uses preconfigured IPs.

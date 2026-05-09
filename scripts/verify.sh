@@ -162,9 +162,11 @@ DNS_QUERY_COUNT=0
 DNS_RESPONSE_OK="false"
 
 if [[ "$NTP_TARGET_KIND" == "fqdn" ]]; then
-    # CoreDNS log plugin format includes the queried name. Match
-    # case-insensitively, allow trailing dot.
-    DNS_QUERY_COUNT="$(grep -ciE "\\b${NTP_TARGET}\\.?\\b" "$DNS_LOG" || true)"
+    # dnsmasq log format with `log-queries=extra`:
+    #   dnsmasq[PID]: query[A] ntp2.wbg.org from 192.168.x.y
+    # Counting just `query[<TYPE>] <NAME>` avoids double-counting the
+    # follow-up `cached/forwarded` lines for the same query.
+    DNS_QUERY_COUNT="$(grep -ciE "query\\[[A-Z]+\\] ${NTP_TARGET}\\.?" "$DNS_LOG" || true)"
 
     if (( DNS_QUERY_COUNT > 0 )); then
         pass "device queried ${NTP_TARGET} (${DNS_QUERY_COUNT} log lines)"
@@ -191,6 +193,28 @@ else
     else
         note "DNS log shows ${DNS_OTHER} lines (other names the device queried — review ${DNS_LOG})"
     fi
+fi
+
+# DHCP assertions (always meaningful — Q-IP closed as DHCP).
+# dnsmasq log format with `log-dhcp`:
+#   dnsmasq-dhcp[PID]: DHCPDISCOVER(eth1) cc:82:7f:91:75:6f
+#   dnsmasq-dhcp[PID]: DHCPOFFER(eth1) 192.168.50.100 cc:82:7f:91:75:6f
+#   dnsmasq-dhcp[PID]: DHCPREQUEST(eth1) 192.168.50.100 cc:82:7f:91:75:6f
+#   dnsmasq-dhcp[PID]: DHCPACK(eth1) 192.168.50.100 cc:82:7f:91:75:6f
+# A successful lease is proven by at least one DHCPACK line.
+printf '\nDHCP:\n'
+DHCP_DISCOVER_COUNT="$(grep -c 'DHCPDISCOVER' "$DNS_LOG" 2>/dev/null || true)"
+DHCP_ACK_COUNT="$(grep -c 'DHCPACK' "$DNS_LOG" 2>/dev/null || true)"
+DHCP_LEASE_OK="false"
+
+if (( DHCP_ACK_COUNT > 0 )); then
+    DHCP_LEASE_OK="true"
+    pass "DHCP lease granted (${DHCP_DISCOVER_COUNT} discovers, ${DHCP_ACK_COUNT} acks)"
+elif (( DHCP_DISCOVER_COUNT > 0 )); then
+    fail "saw ${DHCP_DISCOVER_COUNT} DHCPDISCOVER but 0 DHCPACK — exchange broke (review dns log)"
+else
+    fail "no DHCP traffic observed in ${DURATION}s"
+    note "device may not be reaching the rig — check cable + setup-host-nic.sh ran + DHCP_RANGE inside NODE_SUBNET"
 fi
 
 # NTP assertions (always meaningful).
@@ -288,6 +312,9 @@ jq -n \
     --arg dns_secondary_ip "$DNS_SECONDARY_IP" \
     --argjson dns_query_count "$DNS_QUERY_COUNT" \
     --argjson dns_response_ok "$DNS_RESPONSE_OK" \
+    --argjson dhcp_discover_count "$DHCP_DISCOVER_COUNT" \
+    --argjson dhcp_ack_count "$DHCP_ACK_COUNT" \
+    --argjson dhcp_lease_ok "$DHCP_LEASE_OK" \
     --argjson req_count "$REQ_COUNT" \
     --argjson resp_count "$RESP_COUNT" \
     --argjson ntp_exchange_ok "$NTP_EXCHANGE_OK" \
@@ -306,6 +333,11 @@ jq -n \
             dns_secondary_ip: ($dns_secondary_ip | select(. != ""))
         },
         results: {
+            dhcp: {
+                discover_count: $dhcp_discover_count,
+                ack_count: $dhcp_ack_count,
+                lease_granted: $dhcp_lease_ok
+            },
             dns: {
                 query_count: $dns_query_count,
                 response_correct: $dns_response_ok

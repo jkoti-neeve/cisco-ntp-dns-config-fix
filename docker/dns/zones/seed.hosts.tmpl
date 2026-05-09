@@ -1,7 +1,8 @@
 # Seed DNS records — generated from .env by scripts/render-config.sh.
 #
-# Format: `<IP> <hostname>` per line, hosts(5) syntax. Edit at runtime to
-# add records discovered from the CoreDNS query log (capture-then-respond).
-# CoreDNS reloads on file change.
+# Format: `<IP> <hostname>` per line, hosts(5) syntax. dnsmasq reads it
+# via `addn-hosts=/etc/dnsmasq.d/seed.hosts` (set in dnsmasq.conf).
+# Edit at runtime to add records discovered from the dnsmasq query log
+# (capture-then-respond), then reload with `docker compose restart dns`.
 
 ${NTP_RECORD_LINE}

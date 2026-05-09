@@ -13,14 +13,16 @@
 
 services:
   dns:
-    image: coredns/coredns:1.11.3
+    build: ./docker/dns
     network_mode: host
     restart: unless-stopped
+    cap_add:
+      - NET_ADMIN          # required for DHCP raw sockets (UDP/67 + 68)
     volumes:
-      - ./out/render/dns/Corefile:/etc/coredns/Corefile:ro
-      - ./out/render/dns/zones:/etc/coredns/zones:ro
-    command: ["-conf", "/etc/coredns/Corefile"]
-    # CoreDNS logs every query to stdout via the `log` plugin (Corefile.tmpl).
+      - ./out/render/dns/dnsmasq.conf:/etc/dnsmasq.conf:ro
+      - ./out/render/dns/zones/seed.hosts:/etc/dnsmasq.d/seed.hosts:ro
+    # dnsmasq logs every DNS query (`log-queries=extra`) and every DHCP
+    # transaction (`log-dhcp`) to stdout via `log-facility=-`.
     # Capture during runs with `docker compose logs -f dns | tee out/run/dns.log`.
 
   ntp:
