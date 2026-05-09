@@ -29,8 +29,9 @@ services:
     build: ./docker/ntp
     network_mode: host
     restart: unless-stopped
+    cap_add:
+      - SYS_TIME           # chrony 4.5 calls adjtimex() during privdrop
+                           # init even in `manual` mode — without this it
+                           # exits "Operation not permitted" on startup.
     volumes:
       - ./out/render/ntp/chrony.conf:/etc/chrony/chrony.conf:ro
-    # No cap_add — chrony.conf uses `manual` (no clock discipline), so
-    # CAP_SYS_TIME is not needed. Binding UDP/123 is allowed by default
-    # since containers run as root.

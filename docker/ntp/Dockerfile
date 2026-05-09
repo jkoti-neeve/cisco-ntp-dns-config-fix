@@ -6,7 +6,10 @@
 # the rig is pointed at.
 FROM alpine:3.20
 
-RUN apk add --no-cache chrony && mkdir -p /var/log/chrony
+RUN apk add --no-cache chrony && mkdir -p /var/log/chrony /var/run/chrony
 
 # Run chronyd in the foreground (-d) reading the mounted config.
-ENTRYPOINT ["chronyd", "-d", "-f", "/etc/chrony/chrony.conf"]
+# Wipe any stale pidfile first: a previous crash can leave
+# /var/run/chrony/chronyd.pid behind, which makes the next chronyd
+# refuse to start ("Another chronyd may already be running").
+ENTRYPOINT ["sh", "-c", "rm -f /var/run/chrony/chronyd.pid; exec chronyd -d -f /etc/chrony/chrony.conf"]
