@@ -150,6 +150,12 @@ These are answered in chunk 1 below.
 - Fix-and-commit per fix; update README only if the *procedure* changed
 - If lessons are learned, append to `.ai/PROJECT_LESSONS.md`
 
+**Known issues queued for chunk 6** (carry-forward bugs surfaced but not yet fixed):
+
+| # | Where | Symptom | Repro | Hypothesis | Workaround | Severity |
+|---|-------|---------|-------|------------|------------|----------|
+| 1 | `scripts/setup-host-nic.sh` (`--teardown` path) | Loop reports `skip <ip> (not bound)` for an IP that IS still bound; that IP is left behind on the NIC after teardown completes | First observed 2026-05-09 on the VM with `DNS_PRIMARY_IP=138.220.4.4`, `DNS_SECONDARY_IP=138.220.8.8`, `NTP_BIND_IP=192.168.50.123`, `DHCP_GATEWAY_IP=192.168.50.1` (4 aliases, 2 in-subnet at /24, 2 out-of-subnet at /32). Teardown removed `138.220.4.4/32`, `192.168.50.123/24`, `192.168.50.1/24` but left `138.220.8.8/32` bound, despite reporting "skip … (not bound)" for it | Either (a) kernel transient state in the brief window between removing one alias and querying the next via `ip -o -4 addr show`, or (b) a bash/grep edge case in the find-check `grep -qE "inet ${ip//./\\.}/"` against the `ip -o` output. Worth re-running with `set -x` to capture the exact regex + actual `ip` output at the moment of the false-negative | `sudo ip addr del 138.220.8.8/32 dev eth1` (one-shot manual cleanup) | LOW — only affects teardown cleanup; deploy and runtime behavior are unaffected. The leftover address is harmless on the air-gapped link |
+
 ---
 
 ## Files
