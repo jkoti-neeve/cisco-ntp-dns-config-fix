@@ -140,6 +140,15 @@ These are answered in chunk 1 below.
 - Advantech 2484 firmware/admin docs identify a required DHCP option or out-of-band trigger
 - A specific DHCP option/value the operator wants tested (we'd add it as another optional env var)
 
+### 4. **[OBSERVE]** — validation update (2026-05-12)
+
+The "blocker is device-side" classification from 2026-05-09 was **affirmatively validated** in a separate session (`.ai/sessions/2026-05-14-1601-jkoti-neeve-retest-existing-config.md`, plan: `.ai/plans/2026-05-12-1647-jkoti-neeve-retest-existing-config-laptop-sub.md`, report: `.ai/reports/plan-implementation/2026-05-14-1601-jkoti-neeve-retest-existing-config-laptop-sub-report.md`) via a laptop-substitution test on the same cable:
+
+- **Rig PASS**: Windows laptop (Wi-Fi off) DHCP'd into 192.168.50.196, both DNS alias IPs (138.220.4.4 and 138.220.8.8) returned the seeded `ntp2.wbg.org → 192.168.50.123` record, and `w32tm /stripchart` round-tripped with chrony (12+ samples, no failures). Pcap: `out/run/laptop-sub-20260512-211431.pcap` (2.4 MB; 13 DHCP + 28998 DNS + 358 NTP + 204 ARP).
+- **Device REPRO**: Immediately after, the 2484 was reinserted on the same cable and power-cycled. ~3 min observation window: DHCP exchange clean (lease 192.168.50.172 to nodeos, all options accepted including option 15 wbg.org), then **zero DNS, zero NTP, zero spontaneous traffic** — only ARP replies to rig probes. Identical to 2026-05-09. Pcap: `out/run/device-recheck-20260512-214029.pcap` (3.3 KB).
+
+Chunk 4's classification is now upgraded from "inferred by elimination" to "two-sided proven". No rig change is implied by this validation; the Resume conditions above still hold.
+
 ### 5. **[VERIFY]** Run verify.sh end-to-end
 - `sudo bash scripts/verify.sh --duration 300` (5 min) with the node cabled and powered
 - Inspect `out/run/<run-id>/summary.json` and logs
